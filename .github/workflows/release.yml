@@ -1,5 +1,6 @@
 name: Create release and upload to Apple and Google
 on:
+  workflow_dispatch: # Allow manual triggering for testing
   push:
     tags:
       # Only builds for tags with a meaningless build number suffix: v1.0.0-1
@@ -21,7 +22,7 @@ jobs:
       - name: Patch Go
         uses: DefinedNet/patch-go@c8e4a17c75eb242d34c212419d7d3d25e8d58949
         with:
-          patch-ref: '296be05a97eb526dc0e438b7387670d4cae4a935'
+          patch-ref: "296be05a97eb526dc0e438b7387670d4cae4a935"
 
       - uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 #v4.7.0
         with:

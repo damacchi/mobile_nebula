@@ -1,0 +1,89 @@
+name: Build Android APK for Manual Install
+
+# Only allow manual triggering from GitHub UI
+on:
+  workflow_dispatch: # Allows manual trigger from Actions tab
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest # Using Ubuntu instead of macOS for faster/cheaper builds
+
+    steps:
+      # Step 1: Download the repository code
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      # Step 2: Apply a temporary Go patch (remove when fix is in mainline)
+      # TODO: remove when https://go-review.googlesource.com/c/go/+/692935 lands in mainline go
+      - name: Patch Go
+        uses: DefinedNet/patch-go@c8e4a17c75eb242d34c212419d7d3d25e8d58949
+        with:
+          patch-ref: "296be05a97eb526dc0e438b7387670d4cae4a935"
+
+      # Step 3: Install Java 17 (required for Android builds)
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "17"
+
+      # Step 4: Install Flutter framework at specific version
+      - name: Install flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.29.2"
+
+      # Step 5: Download bundletool (Google's tool to convert .aab to .apk)
+      - name: Setup bundletool for APK generation
+        run: |
+          curl -Lo bundletool.jar https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar
+
+      # Step 6: Decode and install the keystore file for signing the APK
+      # The keystore is stored as a base64-encoded secret in GitHub
+      - name: Install the google play keystore for signing
+        env:
+          GOOGLE_PLAY_KEYSTORE_BASE64: ${{ secrets.GOOGLE_PLAY_KEYSTORE_BASE64 }}
+        run: |
+          GOOGLE_PLAY_KEYSTORE_PATH="$RUNNER_TEMP/gp_signing.jks"
+          echo "GOOGLE_PLAY_KEYSTORE_PATH=$GOOGLE_PLAY_KEYSTORE_PATH" >> $GITHUB_ENV
+          echo -n "$GOOGLE_PLAY_KEYSTORE_BASE64" | base64 --decode --output "$GOOGLE_PLAY_KEYSTORE_PATH"
+
+      # Step 7: Install Go mobile tools and Flutter dependencies
+      - name: Get dependencies
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest  # Install gomobile for Go-based Android libs
+          gomobile init  # Initialize gomobile
+          flutter pub get  # Download Flutter package dependencies
+          touch env.sh  # Create empty env.sh file (required by build process)
+
+      # Step 8: Build the Android App Bundle (.aab file)
+      # This is the format Google Play Store uses, but we'll convert it to APK
+      - name: Build Android App Bundle
+        env:
+          GOOGLE_PLAY_KEYSTORE_PASSWORD: ${{ secrets.GOOGLE_PLAY_KEYSTORE_PASSWORD }}
+        run: |
+          flutter build appbundle
+
+      # Step 9: Convert the .aab to a universal .apk using bundletool
+      # Universal APK works on all device architectures
+      - name: Generate universal APK from App Bundle
+        env:
+          GOOGLE_PLAY_KEYSTORE_PASSWORD: ${{ secrets.GOOGLE_PLAY_KEYSTORE_PASSWORD }}
+        run: |
+          java -jar bundletool.jar build-apks \
+            --bundle=build/app/outputs/bundle/release/app-release.aab \
+            --output=build/app/outputs/apk/release/MobileNebula.apks \
+            --mode=universal \
+            --ks=$GOOGLE_PLAY_KEYSTORE_PATH \
+            --ks-key-alias=key \
+            --ks-pass=pass:$GOOGLE_PLAY_KEYSTORE_PASSWORD
+          unzip -p build/app/outputs/apk/release/MobileNebula.apks universal.apk > build/app/outputs/apk/release/MobileNebula.apk
+
+      # Step 10: Upload the APK as a downloadable artifact
+      # You can download this from the Actions run page for 30 days
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileNebula-${{ github.sha }}.apk # Include commit hash in filename
+          path: build/app/outputs/apk/release/MobileNebula.apk
+          retention-days: 30 # Keep artifact for 30 days
